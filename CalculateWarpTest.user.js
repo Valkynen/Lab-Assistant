@@ -172,7 +172,7 @@
         return fleet.subwarpSpeed > 0 ? distance / (fleet.subwarpSpeed / 1e6) : 0
     }
 
-    function calculateSupplyRequirements(timeToFull, foodToFull, ammoToFull, planetExitFuelAmount, supplyTime) {
+    function calculateSupplyRequirements(timeToFull, foodToFull, ammoToFull, planetExitFuelAmount, supplyTime, miningFleetCapacity, cargoFleetCapacity) {
         // Calculate consumption rates per second for food, ammo, and fuel
         const foodConsumptionRate = foodToFull / timeToFull;
         const ammoConsumptionRate = ammoToFull / timeToFull;
@@ -183,11 +183,26 @@
         const ammoNeeded = ammoConsumptionRate * supplyTime;
         const fuelNeeded = fuelConsumptionRate * supplyTime;
 
+        // Calculate the number of fills (including partial fills)
+        const fillsPerTrip = Math.floor(supplyTime / timeToFull);
+
+        // Calculate the total mined output during the supply time
+        const totalMinedOutput = fillsPerTrip * miningFleetCapacity;
+
+        // Calculate the disparity between mining output and cargo fleet capacity
+        const cargoDisparity = cargoFleetCapacity - totalMinedOutput;
+
+        // Calculate the normalized efficiency between -1 and 1
+        const normalizedEfficiency = cargoDisparity / cargoFleetCapacity;
+
         // Round up to ensure enough resources are supplied
         return {
+            resourceOutputPerTrip: totalMinedOutput,
             food: Math.ceil(foodNeeded),
             ammo: Math.ceil(ammoNeeded),
-            fuel: Math.ceil(fuelNeeded)
+            fuel: Math.ceil(fuelNeeded),
+            cargoDisparity: cargoDisparity,
+            cargoEfficiency: normalizedEfficiency.toFixed(2)
         };
     }
 
@@ -231,13 +246,25 @@
         MRZ_35: [49,20]
     };
 
-     class Fleet {
-        constructor({name, warpSpeed, subwarpSpeed, warpCooldown, maxWarpDistance}) {
+     class CargoFleet {
+        constructor({name, warpSpeed, subwarpSpeed, warpCooldown, maxWarpDistance, cargoCapacity}) {
             this.name = name;
             this.warpSpeed = warpSpeed * 1000000;
             this.subwarpSpeed = subwarpSpeed * 1000000;
             this.warpCooldown = warpCooldown;
             this.maxWarpDistance = maxWarpDistance * 100;
+            this.cargoCapacity = cargoCapacity;
+        }
+    }
+
+    class MiningFleet {
+        constructor({name, timeToFull, foodToFull, ammoToFull, planetExitFuelAmount, cargoCapacity}) {
+            this.name = name;
+            this.timeToFull = timeToFull;
+            this.foodToFull = foodToFull;
+            this.ammoToFull = ammoToFull;
+            this.planetExitFuelAmount = planetExitFuelAmount;
+            this.cargoCapacity = cargoCapacity;
         }
     }
 
@@ -254,7 +281,7 @@
 
     function testWarpJumps() {
 
-        let PackliteFleet = new Fleet({
+        let PackliteFleet = new CargoFleet({
             name: "Packlite",
             warpSpeed: 0.1,
             subwarpSpeed: 0.0048,
@@ -262,15 +289,7 @@
             maxWarpDistance: 9.5,
         });
 
-        let CF5 = new Fleet({
-            name: "Packlite",
-            warpSpeed: 0.1,
-            subwarpSpeed: 0.0048,
-            warpCooldown: 240,
-            maxWarpDistance: 9.5,
-        });
-
-        let OmFleet = new Fleet({
+        let OmFleet = new CargoFleet({
             name: "OM",
             warpSpeed: 0.1,
             subwarpSpeed: 0.0038,
@@ -318,7 +337,35 @@
            returnTrip: true
         });
 
-        let currentWarpTest = packliteFleetWarpTest01;
+        let cargoFleet_CF5 = new CargoFleet({
+            name: "CF5",
+            warpSpeed: 0.1,
+            subwarpSpeed: 0.0048,
+            warpCooldown: 240,
+            maxWarpDistance: 9.5,
+            cargoCapacity: 45073
+        });
+
+        let miningFleet_MF5 = new MiningFleet({
+            name: "MF5-Titanium",
+            timeToFull: 4204,
+            foodToFull: 303,
+            ammoToFull: 0,
+            planetExitFuelAmount: 145,
+            cargoCapacity: 32270
+        });
+
+        let supplyWarpTestCF5 = new WarpTest({
+           fleet: cargoFleet_CF5,
+           startCoords: mudCoords.MRZ_8,
+           endCoords: mudCoords.MRZ_4,
+           useWarp: false,
+           subwarpShortDist: true,
+           returnTrip: true
+        });
+
+        let currentWarpTest = supplyWarpTestCF5;
+        let currentMiningFleet = miningFleet_MF5;
 
         let currentFleet = currentWarpTest.fleet;
         let startCoords = [...currentWarpTest.startCoords];
@@ -420,7 +467,7 @@
                     returnTripStarted = true;
                 }
 
-                console.log(`%cJump #${warpJumps}: Current WP = (${curWP}), Next WP = (${nextWP}), Warp Distance = ${warpDistance} Cooldown Time = ${FormatSeconds(coolDownTime)} Warp Time = ${FormatSeconds(warpTime)}`, "color: orange;");
+                console.log(`%Warp #${warpJumps}: Current WP = (${curWP}), Next WP = (${nextWP}), Warp Distance = ${warpDistance} Cooldown Time = ${FormatSeconds(coolDownTime)} Warp Time = ${FormatSeconds(warpTime)}`, "color: orange;");
             }
 
 			curWP = nextWP;
@@ -431,13 +478,27 @@
             }
 		};
 
+        let supplyRequirements = calculateSupplyRequirements(currentMiningFleet.timeToFull, currentMiningFleet.foodToFull, currentMiningFleet.ammoToFull, currentMiningFleet.planetExitFuelAmount, totalTime, currentMiningFleet.cargoCapacity, currentWarpTest.fleet.cargoCapacity);
+
         console.warn('Testing Warp Jumps Complete ------------------------------------------');
         console.log(`Total Warp Jumps: ${warpJumps} / Total Warp Distance: ${totalWarpDistance} au / Total Warp Time: ${FormatSeconds(totalWarpTime)}`);
         console.log(`Total Subwarp Jumps: ${subwarpJumps} / Total Warp Distance: ${totalSubwarpDistance} au / Total Subwarp Time: ${FormatSeconds(totalSubwarpTime)}`);
         console.log(`Total Cooldown Time: ${FormatSeconds(totalCooldownTime)}`);
-        console.log(`%cTotal Travel Distance: ${totalDistance} au Total Travel Time: ${FormatSeconds(totalTime)}`, "color:#00FF00;");
+        console.log(`%cTotal Travel Distance: ${totalDistance} au Total Travel Time: ${FormatSeconds(totalTime)}`, "color:lime;");
+        console.warn("Supply Chain Info-----------------------------------------------------");
+        console.log(`Total Food Needed Per Trip: ${supplyRequirements.food}`);
+        console.log(`Total Ammo Needed Per Trip: ${supplyRequirements.ammo}`);
+        console.log(`Total Fuel Needed Per Trip: ${supplyRequirements.fuel}`);
+        console.log(`Resource Output Per Trip: ${supplyRequirements.resourceOutputPerTrip}`);
+        console.log(`Cargo Capacity Per Trip: ${currentWarpTest.fleet.cargoCapacity}`);
+        console.log(`Cargo/Mining fleet cargo disparity: %c${supplyRequirements.cargoDisparity}`, getColor(supplyRequirements.cargoDisparity));
+        console.log(`Cargo fleet efficiency: %c${supplyRequirements.cargoEfficiency}`, getColor(supplyRequirements.cargoEfficiency));
         console.warn("----------------------------------------------------------------------");
 	};
+
+    function getColor(value) {
+        return `color: ${value < 0 ? 'tomato' : 'lime'};`;
+    }
 
     testWarpJumps()
 
